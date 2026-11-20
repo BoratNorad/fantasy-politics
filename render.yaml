@@ -1,0 +1,56 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# Creates: the web service (API + websockets + frontend), a Postgres database,
+# and the weekly scoring cron job. All in the same region so they talk over
+# Render's private network.
+
+databases:
+  - name: fantasy-politics-db
+    plan: basic-256mb        # ~$6/mo. "free" works for testing but expires after 30 days.
+    region: oregon
+    databaseName: fantasy_politics
+    user: fantasy_politics
+    ipAllowList: []          # private network only (no public access)
+
+services:
+  - type: web
+    name: fantasy-politics
+    runtime: node
+    plan: starter            # ~$7/mo. Free instances sleep after 15 min idle (bad for live drafts).
+    region: oregon
+    buildCommand: npm ci --include=dev && npm run build
+    # Runs migrations, seeds the player pool if empty, then starts the server.
+    startCommand: npm run start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fantasy-politics-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_EMAILS
+        sync: false          # you'll be prompted for this on first deploy
+      - key: PUBLIC_URL
+        sync: false          # optional, e.g. https://fantasy-politics.onrender.com
+
+  - type: cron
+    name: fantasy-politics-weekly-scoring
+    runtime: node
+    plan: starter            # billed per-minute of runtime; this job runs ~1 min/week
+    region: oregon
+    schedule: "0 6 * * 1"    # every Monday 06:00 UTC
+    buildCommand: npm ci --include=dev && npm run build --workspace server
+    startCommand: npm run job:weekly --workspace server
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fantasy-politics-db
+          property: connectionString
